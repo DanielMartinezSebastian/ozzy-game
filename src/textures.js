@@ -24,7 +24,7 @@ const noise = (ctx, w, h, amt) => {
   ctx.putImageData(img, 0, 0)
 }
 
-export const makeWallTexture = () =>
+export const makeWallTexture = (bloody = true) =>
   canvasTex(64, 96, (ctx, w, h) => {
     ctx.fillStyle = '#140d0b'
     ctx.fillRect(0, 0, w, h)
@@ -32,13 +32,13 @@ export const makeWallTexture = () =>
     for (let row = 0; row < h / bh; row++) {
       const off = row % 2 ? 8 : 0
       for (let x = -off; x < w; x += 16) {
-        const s = 40 + Math.random() * 30
+        const s = bloody ? 40 + Math.random() * 30 : 75 + Math.random() * 35
         ctx.fillStyle = `rgb(${s + 22},${s * 0.5},${s * 0.42})`
         ctx.fillRect(x + 1, row * bh + 1, 14, bh - 2)
       }
     }
     // Salpicaduras y chorreones de sangre
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < (bloody ? 7 : 0); i++) {
       ctx.fillStyle = `rgba(${70 + Math.random() * 50},0,0,${0.5 + Math.random() * 0.4})`
       const x = Math.random() * w
       const y = Math.random() * h * 0.6
@@ -46,7 +46,7 @@ export const makeWallTexture = () =>
       ctx.fillRect(x, y, 1 + Math.random() * 2, 10 + Math.random() * 50)
     }
     // Arañazos de garras
-    if (Math.random() < 0.5) {
+    if (bloody && Math.random() < 0.5) {
       ctx.fillStyle = 'rgba(0,0,0,0.75)'
       const x = 10 + Math.random() * 30
       const y = 20 + Math.random() * 40

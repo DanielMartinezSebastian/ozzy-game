@@ -69,6 +69,17 @@ export function buildDog(image) {
   const img = ctx.getImageData(0, 0, TEX, TEX)
   const p = img.data
   const bg = cutout(p, TEX, TEX)
+  for (let i = 0; i < TEX * TEX; i++) p[i * 4 + 3] = bg[i] ? 0 : 255
+
+  // Versión "normal" (perrito tal cual) para el principio de la partida
+  const nc = document.createElement('canvas')
+  nc.width = nc.height = TEX
+  nc.getContext('2d').putImageData(img, 0, 0)
+  const normalTexture = new THREE.CanvasTexture(nc)
+  normalTexture.colorSpace = THREE.SRGBColorSpace
+  normalTexture.magFilter = THREE.NearestFilter
+
+  // Versión tenebrosa
   for (let i = 0; i < TEX * TEX; i++) {
     const o = i * 4
     if (bg[i]) { p[o + 3] = 0; continue }
@@ -149,5 +160,5 @@ export function buildDog(image) {
     return { pos: new THREE.Vector3((u - 0.5) * DOG_SIZE, (0.5 - v) * DOG_SIZE, depthAt(u, v, i) + 0.03), color: glow }
   })
 
-  return { texture, geometry, eyes }
+  return { texture, normalTexture, geometry, eyes }
 }

@@ -5,6 +5,8 @@ import * as THREE from 'three'
 import { generateMaze } from './maze'
 import { makeCeilTexture, makeFloorTexture, makeGlowTexture, makeWallTexture } from './textures'
 import { buildDog, DOG_SIZE } from './dog'
+import { createParticles } from './particles'
+import { MadnessEffects } from './Effects'
 import { sfx } from './sfx'
 
 export const CELL = 2
@@ -32,9 +34,13 @@ function useKeys() {
   return keys
 }
 
-function Walls({ grid }) {
+function Walls({ grid, madRef }) {
   const ref = useRef()
-  const tex = useMemo(makeWallTexture, [])
+  const [clean, bloody] = useMemo(() => [makeWallTexture(false), makeWallTexture(true)], [])
+  useFrame(() => {
+    const map = madRef.current.madness > 0.35 ? bloody : clean
+    if (ref.current.material.map !== map) ref.current.material.map = map
+  })
   const cells = useMemo(() => {
     const out = []
     grid.forEach((row, y) => row.forEach((v, x) => v && out.push([x, y])))
@@ -53,7 +59,7 @@ function Walls({ grid }) {
   return (
     <instancedMesh ref={ref} args={[undefined, undefined, cells.length]}>
       <boxGeometry args={[CELL, WALL_H, CELL]} />
-      <meshLambertMaterial map={tex} />
+      <meshLambertMaterial map={clean} />
     </instancedMesh>
   )
 }
@@ -108,6 +114,9 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
   const light = useRef()
   const glow = useRef()
   const sprites = useRef([])
+  const ambient = useRef()
+  const madRef = useRef({ madness: 0, kick: 0 })
+  const particles = useMemo(() => createParticles(), [])
 
   const level = useMemo(() => {
     const grid = generateMaze(MAZE_SIZE, MAZE_SIZE)
@@ -131,7 +140,7 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
   const dogImage = useLoader(THREE.ImageLoader, '/dog.png')
   const dog = useMemo(() => buildDog(dogImage), [dogImage])
   const dogMats = useMemo(
-    () => level.enemies.map(() => new THREE.MeshLambertMaterial({ map: dog.texture, alphaTest: 0.5 })),
+    () => level.enemies.map(() => new THREE.MeshLambertMaterial({ map: dog.normalTexture, alphaTest: 0.5 })),
     [level, dog],
   )
   const eyeMats = useMemo(() => {
@@ -140,16 +149,17 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
       (eye) =>
         new THREE.SpriteMaterial({
           map: glow, color: eye.color, blending: THREE.AdditiveBlending,
-          depthWrite: false, fog: false, transparent: true,
+          depthWrite: false, fog: false, transparent: true, opacity: 0,
         }),
     )
   }, [dog])
 
   const st = useRef({
     hp: 100, ammo: 50, kills: 0, status: 'playing', bob: 0, bobAmp: 0, cd: 0, flash: 0,
-    flowT: 0, flow: null, beatT: 0, flicker: 0,
+    flowT: 0, flow: null, beatT: 0, flicker: 0, madness: 0, kick: 0,
   })
   const { scene } = useThree()
+  const fogColor = useMemo(() => new THREE.Color(), [])
   useEffect(() => {
     const t = light.current.target
     scene.add(t)
@@ -171,7 +181,8 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
 
   const pushHud = () => {
     const s = st.current
-    onHud({ hp: s.hp, ammo: s.ammo, kills: s.kills, total: level.enemies.length, status: s.status })
+    const total = level.enemies.length
+    onHud({ hp: s.hp, ammo: s.ammo, kills: s.kills, total, status: s.status, madness: Math.round((s.kills / total) * 100) })
   }
 
   // Posición inicial mirando hacia el pasillo abierto
@@ -180,7 +191,7 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
     if (level.grid[1][2] === 0) camera.lookAt(CELL * 2, EYE, CELL)
     else camera.lookAt(CELL, EYE, CELL * 2)
     pushHud()
-    if (import.meta.env.DEV) window.__maze = { camera, level }
+    if (import.meta.env.DEV) window.__maze = { camera, level, st, particles }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -198,6 +209,7 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
       sfx.shoot()
       onFire()
       camera.getWorldDirection(dir)
+      particles.muzzle(camera.localToWorld(v.set(0, -0.12, -0.5)), dir, s.madness)
       let best = null
       let bestT = Infinity
       for (const en of level.enemies) {
@@ -211,6 +223,26 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
           bestT = t
         }
       }
+      // Dónde choca la bala con pared/suelo/techo
+      const o = camera.position
+      let wallT = 30
+      for (let t = 0.1; t < 30; t += 0.05) {
+        const y = o.y + dir.y * t
+        if (isWall(o.x + dir.x * t, o.z + dir.z * t) || y <= 0 || y >= WALL_H) { wallT = t; break }
+      }
+      if (best && bestT < wallT) {
+        particles.impactFlesh(v.copy(o).addScaledVector(dir, bestT), dir.clone().negate(), s.madness)
+      } else if (wallT < 30) {
+        best = null
+        const hit = v.copy(o).addScaledVector(dir, wallT - 0.06)
+        const prev = o.clone().addScaledVector(dir, wallT - 0.11)
+        const n = new THREE.Vector3()
+        if (hit.y <= 0.05) n.set(0, 1, 0)
+        else if (hit.y >= WALL_H - 0.05) n.set(0, -1, 0)
+        else if (toCell(o.x + dir.x * wallT) !== toCell(prev.x)) n.set(-Math.sign(dir.x), 0, 0)
+        else n.set(0, 0, -Math.sign(dir.z))
+        particles.impactWall(hit, n)
+      }
       if (best) {
         best.hp--
         best.hitT = 0.15
@@ -218,6 +250,7 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
         if (best.hp <= 0) {
           best.alive = false
           s.kills++
+          s.kick = 1
           sfx.whimper()
         } else sfx.yelp()
       }
@@ -297,8 +330,34 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
     s.cd -= dt
     s.flash = Math.max(0, s.flash - dt * 10)
 
+    // --- Locura: sube con cada perro eliminado ---
+    const madTarget = s.kills / level.enemies.length
+    s.madness += (madTarget - s.madness) * Math.min(1, dt * 0.8)
+    s.kick = Math.max(0, s.kick - dt * 1.2)
+    const m = s.madness
+    madRef.current.madness = m
+    madRef.current.kick = s.kick
+    sfx.setMadness(m)
+    if (s.status === 'playing' && m > 0.25 && Math.random() < dt * m * m * 1.5) {
+      Math.random() < 0.5 ? sfx.shriek() : sfx.cackle()
+    }
+    // Al principio: luz cálida y niebla lejana. Luego: oscuridad roja y niebla que se cierra
+    // Al final, la luz vuelve... pero ciclando colores imposibles
+    ambient.current.intensity = THREE.MathUtils.lerp(1.4, 0.12, Math.min(1, m * 1.6)) + Math.max(0, m - 0.65) * 2.2
+    if (m > 0.65) ambient.current.color.setHSL((performance.now() / 2500) % 1, 1, 0.6)
+    else ambient.current.color.setRGB(1, THREE.MathUtils.lerp(0.92, 0.3, m), THREE.MathUtils.lerp(0.82, 0.25, m))
+    scene.fog.near = THREE.MathUtils.lerp(5, 1, m)
+    scene.fog.far = THREE.MathUtils.lerp(32, 11, Math.min(1, m * 1.4))
+    if (m > 0.6) fogColor.setHSL((performance.now() / 4000) % 1, 0.9, (m - 0.6) * 0.35)
+    else fogColor.set(0, 0, 0)
+    scene.fog.color.copy(fogColor)
+    scene.background.copy(fogColor)
+    for (const mat of dogMats) mat.map = m > 0.3 ? dog.texture : dog.normalTexture
+    for (const mat of eyeMats) mat.opacity = Math.min(1, Math.max(0, (m - 0.15) * 2.5))
+    particles.update(dt)
+
     // Linterna (spot) que a veces parpadea + fogonazo
-    if (s.flicker <= 0 && Math.random() < 0.003) s.flicker = 0.2 + Math.random() * 0.6
+    if (s.flicker <= 0 && Math.random() < 0.006 * m) s.flicker = 0.2 + Math.random() * 0.6
     s.flicker -= dt
     const flick = s.flicker > 0 ? (Math.random() < 0.5 ? 0.05 : 0.6) : 1
     light.current.position.copy(p)
@@ -372,7 +431,7 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
         const mz = tz - e.z
         const ml = Math.hypot(mx, mz)
         if (dist > 1.0 && ml > 0.01) {
-          const step = (sees ? 3.0 : 2.6) * dt
+          const step = (sees ? 3.0 : 2.6) * (1 + m * 0.5) * dt
           const nx = e.x + (mx / ml) * step
           const nz = e.z + (mz / ml) * step
           if (!blocked(nx, e.z, 0.25)) e.x = nx
@@ -446,11 +505,12 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
   return (
     <>
       <color attach="background" args={['#000']} />
-      <fog attach="fog" args={['#000', 1, 13]} />
-      <ambientLight intensity={0.12} color="#ff5040" />
+      <fog attach="fog" args={['#000', 5, 32]} />
+      <ambientLight ref={ambient} intensity={1.4} />
       <spotLight ref={light} color="#ffe2b0" angle={0.55} penumbra={0.6} distance={16} decay={1} />
       <pointLight ref={glow} color="#ff9966" distance={4} decay={1} />
-      <Walls grid={level.grid} />
+      <Walls grid={level.grid} madRef={madRef} />
+      <primitive object={particles.group} />
       <FloorAndCeiling W={level.W} H={level.H} />
       <Exit x={level.exit[0]} y={level.exit[1]} />
       {level.enemies.map((e, i) => (
@@ -463,6 +523,7 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
           ))}
         </group>
       ))}
+      <MadnessEffects madRef={madRef} />
       {playing && <PointerLockControls onLock={() => onLock(true)} onUnlock={() => onLock(false)} />}
     </>
   )

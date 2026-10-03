@@ -33,8 +33,8 @@ function makeDotTexture() {
 
 const KINDS = {
   // vida, tamaño inicial/final, opacidad, arrastre, gravedad, mezcla
-  smoke: { life: [1.2, 2.2], size: [0.08, 0.7], alpha: 0.55, drag: 2.5, grav: 0.35, additive: false, tex: 'smoke' },
-  flash: { life: [0.06, 0.09], size: [0.25, 0.4], alpha: 1, drag: 0, grav: 0, additive: true, tex: 'smoke' },
+  smoke: { life: [1.2, 2.2], size: [0.08, 0.7], alpha: 0.4, drag: 2.5, grav: 0.35, additive: false, tex: 'smoke' },
+  flash: { life: [0.05, 0.08], size: [0.15, 0.25], alpha: 0.8, drag: 0, grav: 0, additive: true, tex: 'smoke' },
   spark: { life: [0.2, 0.5], size: [0.035, 0.01], alpha: 1, drag: 1, grav: -9, additive: true, tex: 'dot' },
   dust: { life: [0.6, 1.2], size: [0.1, 0.5], alpha: 0.5, drag: 3, grav: 0.15, additive: false, tex: 'smoke' },
   blood: { life: [0.4, 0.8], size: [0.06, 0.03], alpha: 1, drag: 0.8, grav: -7, additive: false, tex: 'dot' },

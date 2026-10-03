@@ -170,6 +170,55 @@ function setMadness(m) {
   }
 }
 
+// Mar: ruido marrón en bucle filtrado, con oleaje lento (LFO sobre el volumen)
+let sea = null
+function startSea() {
+  if (sea) return
+  const a = ac()
+  const len = a.sampleRate * 6
+  const buf = a.createBuffer(1, len, a.sampleRate)
+  const d = buf.getChannelData(0)
+  let last = 0
+  for (let i = 0; i < len; i++) {
+    last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02
+    d[i] = last * 3.5
+  }
+  // Fundido en los extremos para que el bucle no haga clic
+  const fade = a.sampleRate * 0.05
+  for (let i = 0; i < fade; i++) { d[i] *= i / fade; d[len - 1 - i] *= i / fade }
+  const src = a.createBufferSource()
+  src.buffer = buf
+  src.loop = true
+  const f = a.createBiquadFilter()
+  f.type = 'lowpass'
+  f.frequency.value = 500
+  const g = a.createGain()
+  g.gain.value = 0
+  g.gain.setTargetAtTime(0.18, a.currentTime, 1.5)
+  const lfo = a.createOscillator()
+  lfo.frequency.value = 0.11
+  const lg = a.createGain()
+  lg.gain.value = 0.08
+  lfo.connect(lg).connect(g.gain)
+  src.connect(f).connect(g).connect(bus)
+  src.start()
+  lfo.start()
+  sea = { src, lfo, g, f }
+}
+function setSea(storm) {
+  if (!sea) return
+  const t = ctx.currentTime
+  sea.g.gain.setTargetAtTime(0.15 + storm * 0.25, t, 0.8)
+  sea.f.frequency.setTargetAtTime(400 + storm * 1400, t, 0.8)
+  sea.lfo.frequency.setTargetAtTime(0.11 + storm * 0.3, t, 0.8)
+}
+function stopSea() {
+  if (!sea) return
+  sea.src.stop()
+  sea.lfo.stop()
+  sea = null
+}
+
 function setVolume(v) {
   volume = Math.min(1, Math.max(0, v))
   try { localStorage.setItem('maze-volume', String(volume)) } catch {}
@@ -207,5 +256,42 @@ export const sfx = {
     const base = 300 + Math.random() * 400
     for (let i = 0; i < 6; i++) tone(base * 1.4, base, 0.08, 'square', 0.06 + mad * 0.06, i * 0.11)
   },
+  // Rayo: chasquido de alta frecuencia + crepitar + zumbido que cae
+  zap: () => {
+    noise(0.22, 3500, 0.4, 'highpass')
+    for (let i = 0; i < 6; i++) tone(900 + Math.random() * 2600, 150 + Math.random() * 300, 0.04 + Math.random() * 0.05, 'sawtooth', 0.05, i * 0.022)
+    tone(1300, 70, 0.32, 'square', 0.05)
+  },
+  // Atravesar el portal: barrido grave que sube con ruido
+  portal: () => {
+    tone(60, 900, 1.4, 'sawtooth', 0.12)
+    tone(90, 1300, 1.4, 'sine', 0.15, 0.1)
+    noise(1.4, 900, 0.3, 'bandpass')
+  },
+  // Plataformas: salto, aterrizaje y caída al vacío
+  jump: () => tone(320, 640, 0.14, 'triangle', 0.08),
+  land: () => { noise(0.08, 500, 0.25); tone(110, 60, 0.1, 'sine', 0.2) },
+  fall: () => { tone(700, 60, 1.2, 'sine', 0.12); noise(1.0, 400, 0.2, 'lowpass') },
+  startSea,
+  setSea,
+  stopSea,
+  // Golpe de cristal: parciales inarmónicos, cada figura con su nota
+  chime: (note = 0, hit = 0) => {
+    const f = 440 * 2 ** ((note * 2 + hit * 3) / 12)
+    for (const [r, v] of [[1, 0.12], [2.76, 0.06], [5.4, 0.03]]) tone(f * r, f * r * 0.98, 1.2, 'sine', v)
+    noise(0.08, 5000, 0.15, 'highpass')
+  },
+  // Figura que revienta: barrido descendente + crujido
+  shatter: () => {
+    noise(1.2, 3500, 0.5, 'highpass')
+    tone(1600, 60, 1.4, 'sawtooth', 0.12)
+    tone(90, 30, 1.6, 'sine', 0.5)
+  },
+  // El mundo cambia: barrido ascendente suave
+  morph: () => {
+    tone(80, 640, 2.2, 'triangle', 0.12)
+    tone(120, 960, 2.2, 'sine', 0.08, 0.15)
+  },
+  splash: () => noise(0.35, 1200, 0.25, 'bandpass'),
   win: () => [0, 0.12, 0.24].forEach((t, i) => tone(330 * (i + 1), 330 * (i + 1), 0.2, 'square', 0.1, t)),
 }

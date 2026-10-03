@@ -1,12 +1,16 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useFrame, useLoader, useThree } from '@react-three/fiber'
-import { PointerLockControls } from '@react-three/drei'
+import { MeshPortalMaterial } from '@react-three/drei'
 import * as THREE from 'three'
 import { generateMaze } from './maze'
 import { makeCeilTexture, makeFloorTexture, makeGlowTexture, makeWallTexture } from './textures'
 import { buildDog, DOG_SIZE } from './dog'
 import { createParticles } from './particles'
 import { MadnessEffects } from './Effects'
+import { createLightning } from './lightning'
+import { HAND_TIP } from './Hand'
+import { useJump, useMouseLook } from './look'
+import { makeDeformMaterial } from './deform'
 import { sfx } from './sfx'
 
 export const CELL = 2
@@ -19,16 +23,20 @@ const UP = new THREE.Vector3(0, 1, 0)
 
 const toCell = (v) => Math.round(v / CELL)
 
-function useKeys() {
+// Teclas pulsadas. Solo cuentan con el ratón capturado: si hay un mensaje en pantalla, no te mueves
+export function useKeys() {
   const keys = useRef({})
   useEffect(() => {
-    const down = (e) => (keys.current[e.code] = true)
+    const down = (e) => { if (document.pointerLockElement) keys.current[e.code] = true }
     const up = (e) => (keys.current[e.code] = false)
+    const release = () => { if (!document.pointerLockElement) keys.current = {} }
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
+    document.addEventListener('pointerlockchange', release)
     return () => {
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
+      document.removeEventListener('pointerlockchange', release)
     }
   }, [])
   return keys
@@ -57,7 +65,7 @@ function Walls({ grid, madRef }) {
   }, [cells])
 
   return (
-    <instancedMesh ref={ref} args={[undefined, undefined, cells.length]}>
+    <instancedMesh ref={ref} args={[undefined, undefined, cells.length]} userData={{ hit: 'wall' }}>
       <boxGeometry args={[CELL, WALL_H, CELL]} />
       <meshLambertMaterial map={clean} />
     </instancedMesh>
@@ -76,11 +84,11 @@ function FloorAndCeiling({ W, H }) {
   const cz = ((H - 1) * CELL) / 2
   return (
     <>
-      <mesh rotation-x={-Math.PI / 2} position={[cx, 0, cz]}>
+      <mesh rotation-x={-Math.PI / 2} position={[cx, 0, cz]} userData={{ hit: 'floor' }}>
         <planeGeometry args={[W * CELL, H * CELL]} />
         <meshLambertMaterial map={floor} />
       </mesh>
-      <mesh rotation-x={Math.PI / 2} position={[cx, WALL_H, cz]}>
+      <mesh rotation-x={Math.PI / 2} position={[cx, WALL_H, cz]} userData={{ hit: 'floor' }}>
         <planeGeometry args={[W * CELL, H * CELL]} />
         <meshLambertMaterial map={ceil} />
       </mesh>
@@ -88,28 +96,78 @@ function FloorAndCeiling({ W, H }) {
   )
 }
 
-function Exit({ x, y }) {
-  const ref = useRef()
+// Lo que se ve a través del portal de salida: el mar de cristal, con sus figuras flotando
+function SeaGlimpse() {
+  const figs = useMemo(
+    () => [
+      { geo: new THREE.IcosahedronGeometry(0.9, 12), mat: makeDeformMaterial('#ff3d7f'), pos: [-2.2, 1.2, -7] },
+      { geo: new THREE.TorusKnotGeometry(0.6, 0.22, 160, 24), mat: makeDeformMaterial('#3dffd5'), pos: [1.8, 1.8, -9] },
+      { geo: new THREE.OctahedronGeometry(0.9, 10), mat: makeDeformMaterial('#ffd23d'), pos: [0.2, 0.6, -13] },
+    ],
+    [],
+  )
+  const refs = useRef([])
   useFrame(({ clock }) => {
-    ref.current.material.opacity = 0.35 + Math.sin(clock.elapsedTime * 4) * 0.15
+    const t = clock.elapsedTime
+    figs.forEach((f, i) => {
+      f.mat.userData.uniforms.uTime.value = t
+      f.mat.userData.uniforms.uDeform.value = 0.25 + Math.sin(t * 0.7 + i) * 0.2
+      const m = refs.current[i]
+      if (m) { m.rotation.set(t * 0.4 + i, t * 0.6, 0); m.position.y = f.pos[1] + Math.sin(t + i * 2) * 0.3 }
+    })
   })
   return (
-    <group position={[x * CELL, 0, y * CELL]}>
-      <mesh ref={ref} position-y={WALL_H / 2}>
-        <cylinderGeometry args={[0.7, 0.7, WALL_H, 16, 1, true]} />
-        <meshBasicMaterial color="#33ff66" transparent side={THREE.DoubleSide} depthWrite={false} />
+    <>
+      <color attach="background" args={['#9fd2ea']} />
+      <fog attach="fog" args={['#bfe3f0', 6, 30]} />
+      <hemisphereLight args={['#fff4dd', '#0b4a6a', 1.6]} />
+      <directionalLight position={[3, 6, 2]} intensity={2.5} />
+      <mesh rotation-x={-Math.PI / 2} position={[0, -1.3, -12]}>
+        <planeGeometry args={[60, 40]} />
+        <meshStandardMaterial color="#0b5a7a" metalness={0.6} roughness={0.15} />
       </mesh>
-      <mesh rotation-x={-Math.PI / 2} position-y={0.01}>
-        <circleGeometry args={[0.8, 16]} />
-        <meshBasicMaterial color="#1aff55" />
+      <mesh position={[3, 4, -25]}>
+        <circleGeometry args={[2, 32]} />
+        <meshBasicMaterial color="#fff6d8" fog={false} />
       </mesh>
-      <pointLight color="#33ff66" intensity={6} distance={8} decay={1} position-y={1.5} />
+      {figs.map((f, i) => (
+        <mesh key={i} ref={(el) => (refs.current[i] = el)} geometry={f.geo} material={f.mat} position={f.pos} />
+      ))}
+    </>
+  )
+}
+
+// Salida del laberinto: un portal en mitad de la última celda, mirando hacia el pasillo
+// por el que se llega. Su luz se ve desde lejos para que no pase desapercibido.
+function Exit({ x, y, facing }) {
+  const ring = useRef()
+  const light = useRef()
+  useFrame(({ clock }) => {
+    const t = clock.elapsedTime
+    ring.current.material.emissiveIntensity = 1.2 + Math.sin(t * 3) * 0.5
+    light.current.intensity = 5 + Math.sin(t * 3) * 1.5
+  })
+  return (
+    <group position={[x * CELL, 1.35, y * CELL]} rotation-y={facing}>
+      <mesh ref={ring}>
+        <torusGeometry args={[0.95, 0.06, 16, 64]} />
+        <meshStandardMaterial color="#123" emissive="#4fd1ff" emissiveIntensity={1.2} />
+      </mesh>
+      <mesh>
+        <circleGeometry args={[0.92, 48]} />
+        <MeshPortalMaterial resolution={512}>
+          <SeaGlimpse />
+        </MeshPortalMaterial>
+      </mesh>
+      <pointLight ref={light} color="#7fe0ff" intensity={5} distance={9} decay={1} position-z={0.6} />
     </group>
   )
 }
 
-export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, vignetteRef }) {
+export function Game({ onHud, onHurt, onFire, onKick, onExit, gunRef, mapRef, vignetteRef }) {
   const { camera } = useThree()
+  useMouseLook(camera)
+  const jump = useJump(sfx.jump, sfx.land)
   const keys = useKeys()
   const light = useRef()
   const glow = useRef()
@@ -117,6 +175,8 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
   const ambient = useRef()
   const madRef = useRef({ madness: 0, kick: 0 })
   const particles = useMemo(() => createParticles(), [])
+  const lightning = useMemo(() => createLightning(), [])
+  const targets = useRef([])
 
   const level = useMemo(() => {
     const grid = generateMaze(MAZE_SIZE, MAZE_SIZE)
@@ -134,7 +194,11 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
         hitT: 0, atk: 0, deadT: 0, phase: Math.random() * 10,
         yaw: Math.random() * Math.PI * 2, growlT: 2 + Math.random() * 4,
       }))
-    return { grid, W, H, exit, enemies }
+    // El portal mira hacia el pasillo abierto por el que se llega a la salida
+    const [ex, ey] = exit
+    const exitFacing =
+      grid[ey][ex - 1] === 0 ? -Math.PI / 2 : grid[ey - 1]?.[ex] === 0 ? Math.PI : grid[ey][ex + 1] === 0 ? Math.PI / 2 : 0
+    return { grid, W, H, exit, exitFacing, enemies }
   }, [])
 
   const dogImage = useLoader(THREE.ImageLoader, '/dog.png')
@@ -182,7 +246,7 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
   const pushHud = () => {
     const s = st.current
     const total = level.enemies.length
-    onHud({ hp: s.hp, ammo: s.ammo, kills: s.kills, total, status: s.status, madness: Math.round((s.kills / total) * 100) })
+    onHud({ hp: s.hp, ammo: s.ammo, kills: s.kills, total, status: s.status, madness: Math.round((s.kills / total) * 100), label: 'BESTIAS', stage: 'maze' })
   }
 
   // Posición inicial mirando hacia el pasillo abierto
@@ -191,14 +255,18 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
     if (level.grid[1][2] === 0) camera.lookAt(CELL * 2, EYE, CELL)
     else camera.lookAt(CELL, EYE, CELL * 2)
     pushHud()
-    if (import.meta.env.DEV) window.__maze = { camera, level, st, particles }
+    if (import.meta.env.DEV) window.__maze = { camera, level, st, particles, lightning }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Disparo
+  // Disparo: rayo desde la mano, resuelto con un Raycaster contra paredes, suelo/techo y perros
   useEffect(() => {
     const dir = new THREE.Vector3()
-    const v = new THREE.Vector3()
+    const tip = new THREE.Vector3()
+    const end = new THREE.Vector3()
+    const n = new THREE.Vector3()
+    const raycaster = new THREE.Raycaster()
+    raycaster.far = 30
     const onDown = (e) => {
       const s = st.current
       if (e.button !== 0 || !document.pointerLockElement || s.status !== 'playing' || s.cd > 0) return
@@ -206,44 +274,23 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
       s.ammo--
       s.cd = 0.35
       s.flash = 1
-      sfx.shoot()
+      sfx.zap()
       onFire()
+      if (!targets.current.length) scene.traverse((o) => o.userData.hit && targets.current.push(o))
       camera.getWorldDirection(dir)
-      particles.muzzle(camera.localToWorld(v.set(0, -0.12, -0.5)), dir, s.madness)
-      let best = null
-      let bestT = Infinity
-      for (const en of level.enemies) {
-        if (!en.alive) continue
-        v.set(en.x, DOG_SIZE / 2, en.z).sub(camera.position)
-        const t = v.dot(dir)
-        if (t <= 0 || t > bestT) continue
-        const perp = v.addScaledVector(dir, -t).length()
-        if (perp < 0.65 && los(camera.position.x, camera.position.z, en.x, en.z)) {
-          best = en
-          bestT = t
-        }
-      }
-      // Dónde choca la bala con pared/suelo/techo
-      const o = camera.position
-      let wallT = 30
-      for (let t = 0.1; t < 30; t += 0.05) {
-        const y = o.y + dir.y * t
-        if (isWall(o.x + dir.x * t, o.z + dir.z * t) || y <= 0 || y >= WALL_H) { wallT = t; break }
-      }
-      if (best && bestT < wallT) {
-        particles.impactFlesh(v.copy(o).addScaledVector(dir, bestT), dir.clone().negate(), s.madness)
-      } else if (wallT < 30) {
-        best = null
-        const hit = v.copy(o).addScaledVector(dir, wallT - 0.06)
-        const prev = o.clone().addScaledVector(dir, wallT - 0.11)
-        const n = new THREE.Vector3()
-        if (hit.y <= 0.05) n.set(0, 1, 0)
-        else if (hit.y >= WALL_H - 0.05) n.set(0, -1, 0)
-        else if (toCell(o.x + dir.x * wallT) !== toCell(prev.x)) n.set(-Math.sign(dir.x), 0, 0)
-        else n.set(0, 0, -Math.sign(dir.z))
-        particles.impactWall(hit, n)
-      }
-      if (best) {
+      camera.localToWorld(tip.copy(HAND_TIP))
+      raycaster.set(camera.position, dir)
+      const hit = raycaster
+        .intersectObjects(targets.current, false)
+        .find((h) => h.object.userData.hit !== 'enemy' || level.enemies[h.object.userData.id].alive)
+      end.copy(hit ? hit.point : camera.position.clone().addScaledVector(dir, raycaster.far))
+      const color = s.madness > 0.5 && Math.random() < s.madness ? new THREE.Color().setHSL(Math.random(), 1, 0.65) : '#8fd8ff'
+      lightning.fire(tip, end, color)
+      particles.zap(tip, dir, color)
+
+      if (hit?.object.userData.hit === 'enemy') {
+        const best = level.enemies[hit.object.userData.id]
+        particles.impactFlesh(hit.point, dir.clone().negate(), s.madness)
         best.hp--
         best.hitT = 0.15
         best.aware = true
@@ -251,8 +298,12 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
           best.alive = false
           s.kills++
           s.kick = 1
+          onKick?.()
           sfx.whimper()
         } else sfx.yelp()
+      } else if (hit) {
+        n.copy(hit.face.normal).transformDirection(hit.object.matrixWorld)
+        particles.impactWall(end.addScaledVector(n, 0.04), n)
       }
       pushHud()
     }
@@ -317,13 +368,13 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
         s.bob += dt * (run ? 14 : 10)
       }
       s.bobAmp = THREE.MathUtils.lerp(s.bobAmp, moving ? 1 : 0, dt * 8)
-      p.y = EYE + Math.sin(s.bob * 2) * 0.05 * s.bobAmp
+      p.y = EYE + Math.sin(s.bob * 2) * 0.05 * s.bobAmp + jump.current.step(dt)
 
-      if (toCell(p.x) === level.exit[0] && toCell(p.z) === level.exit[1]) {
-        s.status = 'won'
-        sfx.win()
-        document.exitPointerLock()
-        pushHud()
+      // Atravesar el portal (llegar al centro de la última celda) lleva al mar
+      if (Math.hypot(p.x - level.exit[0] * CELL, p.z - level.exit[1] * CELL) < 0.45) {
+        s.status = 'exit'
+        sfx.portal()
+        onExit({ hp: s.hp, ammo: s.ammo, kills: s.kills, total: level.enemies.length })
       }
     }
 
@@ -355,6 +406,7 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
     for (const mat of dogMats) mat.map = m > 0.3 ? dog.texture : dog.normalTexture
     for (const mat of eyeMats) mat.opacity = Math.min(1, Math.max(0, (m - 0.15) * 2.5))
     particles.update(dt)
+    lightning.update(dt, camera)
 
     // Linterna (spot) que a veces parpadea + fogonazo
     if (s.flicker <= 0 && Math.random() < 0.006 * m) s.flicker = 0.2 + Math.random() * 0.6
@@ -369,8 +421,8 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
     // Arma: balanceo y retroceso
     if (gunRef.current) {
       const bx = Math.sin(s.bob) * 14 * s.bobAmp
-      const by = Math.abs(Math.cos(s.bob)) * 10 * s.bobAmp + s.flash * 30
-      gunRef.current.style.transform = `translate(calc(-50% + ${bx}px), ${by}px)`
+      const by = Math.abs(Math.cos(s.bob)) * 10 * s.bobAmp + s.flash * 6
+      gunRef.current.style.transform = `translate(${bx}px, ${by}px)`
       gunRef.current.classList.toggle('firing', s.flash > 0.5)
     }
 
@@ -479,26 +531,44 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
     }
     if (vignetteRef.current) vignetteRef.current.style.opacity = nearest < 10 ? 1 - nearest / 10 : 0
 
-    // Minimapa
+    // Minimapa redondo centrado en el jugador. La salida siempre se ve: si queda fuera
+    // del círculo, un marcador en el borde apunta hacia ella
     const cv = mapRef.current
     if (cv) {
       const ctx = cv.getContext('2d')
-      const sz = cv.width / level.W
-      ctx.fillStyle = 'rgba(0,0,0,0.6)'
-      ctx.fillRect(0, 0, cv.width, cv.height)
-      ctx.fillStyle = '#5a2a1a'
-      level.grid.forEach((row, y) => row.forEach((v, x) => v && ctx.fillRect(x * sz, y * sz, sz, sz)))
-      ctx.fillStyle = '#33ff66'
-      ctx.fillRect(level.exit[0] * sz, level.exit[1] * sz, sz, sz)
-      const mx = (p.x / CELL + 0.5) * sz
-      const my = (p.z / CELL + 0.5) * sz
-      ctx.strokeStyle = '#ffee33'
+      const W = cv.width
+      const c = W / 2
+      const sz = W / 11
+      const px = p.x / CELL
+      const pz = p.z / CELL
+      ctx.clearRect(0, 0, W, W)
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'
       ctx.beginPath()
-      ctx.moveTo(mx, my)
-      ctx.lineTo(mx + fwd.x * sz * 1.2, my + fwd.z * sz * 1.2)
+      ctx.arc(c, c, c, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = '#7a3a26'
+      level.grid.forEach((row, y) => row.forEach((v, x) => v && ctx.fillRect(c + (x - px - 0.5) * sz, c + (y - pz - 0.5) * sz, sz, sz)))
+      let ex = c + (level.exit[0] - px) * sz
+      let ey = c + (level.exit[1] - pz) * sz
+      const d = Math.hypot(ex - c, ey - c)
+      const edge = c - 9
+      if (d > edge) { ex = c + ((ex - c) / d) * edge; ey = c + ((ey - c) / d) * edge }
+      const pulse = 5 + Math.sin(performance.now() / 200) * 1.5
+      ctx.fillStyle = '#4fd1ff'
+      ctx.shadowColor = '#4fd1ff'
+      ctx.shadowBlur = 10
+      ctx.beginPath()
+      ctx.arc(ex, ey, pulse, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.shadowBlur = 0
+      ctx.strokeStyle = '#ffee33'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(c, c)
+      ctx.lineTo(c + fwd.x * sz * 1.2, c + fwd.z * sz * 1.2)
       ctx.stroke()
       ctx.fillStyle = '#ffee33'
-      ctx.fillRect(mx - 2, my - 2, 4, 4)
+      ctx.fillRect(c - 3, c - 3, 6, 6)
     }
   })
 
@@ -511,11 +581,17 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
       <pointLight ref={glow} color="#ff9966" distance={4} decay={1} />
       <Walls grid={level.grid} madRef={madRef} />
       <primitive object={particles.group} />
+      <primitive object={lightning.group} />
       <FloorAndCeiling W={level.W} H={level.H} />
-      <Exit x={level.exit[0]} y={level.exit[1]} />
+      <Exit x={level.exit[0]} y={level.exit[1]} facing={level.exitFacing} />
       {level.enemies.map((e, i) => (
         <group key={e.id} ref={(el) => (sprites.current[e.id] = el)} position={[e.x, DOG_SIZE / 2, e.z]}>
           <mesh geometry={dog.geometry} material={dogMats[i]} />
+          {/* Volumen de impacto invisible para el raycaster */}
+          <mesh userData={{ hit: 'enemy', id: e.id }}>
+            <sphereGeometry args={[0.65, 8, 6]} />
+            <meshBasicMaterial visible={false} />
+          </mesh>
           {/* Parte trasera: misma malla espejada */}
           <mesh geometry={dog.geometry} material={dogMats[i]} scale={[1, 1, -1]} />
           {dog.eyes.map((eye, k) => (
@@ -524,7 +600,6 @@ export function Game({ playing, onHud, onHurt, onFire, onLock, gunRef, mapRef, v
         </group>
       ))}
       <MadnessEffects madRef={madRef} />
-      {playing && <PointerLockControls onLock={() => onLock(true)} onUnlock={() => onLock(false)} />}
     </>
   )
 }

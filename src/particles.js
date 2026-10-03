@@ -38,6 +38,10 @@ const KINDS = {
   spark: { life: [0.2, 0.5], size: [0.035, 0.01], alpha: 1, drag: 1, grav: -9, additive: true, tex: 'dot' },
   dust: { life: [0.6, 1.2], size: [0.1, 0.5], alpha: 0.5, drag: 3, grav: 0.15, additive: false, tex: 'smoke' },
   blood: { life: [0.4, 0.8], size: [0.06, 0.03], alpha: 1, drag: 0.8, grav: -7, additive: false, tex: 'dot' },
+  drop: { life: [0.6, 1.1], size: [0.09, 0.04], alpha: 0.9, drag: 0.4, grav: -9.8, additive: false, tex: 'dot' },
+  mist: { life: [0.8, 1.6], size: [0.3, 1.4], alpha: 0.35, drag: 2, grav: 0.2, additive: false, tex: 'smoke' },
+  shard: { life: [0.8, 1.6], size: [0.18, 0.02], alpha: 1, drag: 0.6, grav: -4, additive: true, tex: 'dot' },
+  glow: { life: [0.3, 0.5], size: [0.5, 4], alpha: 0.9, drag: 0, grav: 0, additive: true, tex: 'smoke' },
 }
 
 export function createParticles(max = 220) {
@@ -105,6 +109,39 @@ export function createParticles(max = 220) {
     spawn('dust', pos, v.set(0, 0.3, 0), '#5a0000')
   }
 
+  // Poder eléctrico saliendo de la mano: destello + chispas del color del rayo
+  function zap(pos, dir, color = '#9fdcff') {
+    spawn('glow', pos, v.set(0, 0, 0), color)
+    for (let i = 0; i < 8; i++) {
+      v.copy(dir).multiplyScalar(1 + Math.random() * 3).add({ x: rnd(3), y: rnd(3), z: rnd(3) })
+      spawn('spark', pos, v, Math.random() < 0.5 ? '#ffffff' : color)
+    }
+  }
+
+  // Bala que cae al agua: columna de gotas + bruma
+  function splash(pos) {
+    for (let i = 0; i < 16; i++) spawn('drop', pos, v.set(rnd(2.5), 2.5 + Math.random() * 4, rnd(2.5)), '#dff4ff')
+    for (let i = 0; i < 3; i++) spawn('mist', pos, v.set(rnd(0.6), 0.4, rnd(0.6)), '#cfe8f0')
+  }
+
+  // Impacto en una figura: chispas de su color
+  function sparkle(pos, toward, color) {
+    for (let i = 0; i < 12; i++) {
+      v.copy(toward).multiplyScalar(2 + Math.random() * 3).add({ x: rnd(4), y: rnd(4), z: rnd(4) })
+      spawn('shard', pos, v, color)
+    }
+    spawn('glow', pos, v.set(0, 0, 0), color)
+  }
+
+  // Figura destruida: estallido de fragmentos multicolor
+  function burst(pos, color) {
+    spawn('glow', pos, v.set(0, 0, 0), color)
+    for (let i = 0; i < 60; i++) {
+      v.set(rnd(2), rnd(2), rnd(2)).normalize().multiplyScalar(4 + Math.random() * 8)
+      spawn('shard', pos, v, Math.random() < 0.5 ? color : new THREE.Color().setHSL(Math.random(), 1, 0.6))
+    }
+  }
+
   function update(dt) {
     for (const p of pool) {
       if (!p.sprite.visible) continue
@@ -122,5 +159,5 @@ export function createParticles(max = 220) {
     }
   }
 
-  return { group, update, muzzle, impactWall, impactFlesh }
+  return { group, update, muzzle, zap, impactWall, impactFlesh, splash, sparkle, burst }
 }
